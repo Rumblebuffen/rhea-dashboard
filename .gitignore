@@ -1,0 +1,6 @@
+node_modules
+dist
+public/data/snapshot.json
+.DS_Store
+*.local
+.claude/

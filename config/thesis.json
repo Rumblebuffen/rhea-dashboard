@@ -1,0 +1,19 @@
+{
+  "cheapMcapUsd": 25000000,
+  "cheapFtvUsd": 55000000,
+  "ftvBand": [50000000, 60000000],
+  "targetMultipleIfWorks": [5, 10],
+  "addRule": "add on share + dip; do not add on mcap rip if share is flat",
+  "lastAdvisorPing": { "date": null, "note": "" },
+  "rules": {
+    "addDipPct": 0.3,
+    "shareRollingOverPct": 0.1,
+    "shareFlatPct": 0.05,
+    "chaseRipPct7d": 0.25,
+    "chaseNearHighPct": 0.1,
+    "localHighDays": 30,
+    "fdvRerateMinPct": 0.3,
+    "volumeConfirmMinPct": 0.1,
+    "advisorQuietDays": 21
+  }
+}
