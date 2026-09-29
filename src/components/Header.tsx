@@ -37,7 +37,7 @@ export function Header({ vm }: { vm: HeaderVM }) {
             missing={vm.entryHigh == null ? setIn('entryHigh') : noPrice}
           />
           <Metric
-            label={`${vm.localHighDays}d local high`}
+            label={`${vm.localHighDays}d high (daily prices)`}
             value={price(vm.localHigh)}
             sub={`price is ${pct(vm.vsLocalHigh)} from it`}
             missing={vm.localHigh == null ? 'needs price history' : false}

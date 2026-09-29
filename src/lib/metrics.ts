@@ -325,7 +325,10 @@ function bookStats(b: RheaBook): { depth2: number; slips: SlipCell[] } | null {
       last = p;
       if (remaining <= 0.01) break;
     }
-    return remaining > 0.01 ? { value: last / mid - 1, atLeast: true } : { value: cost / qty / mid - 1 };
+    if (remaining <= 0.01) return { value: cost / qty / mid - 1 };
+    // The visible book ran out: best case, the rest fills at the last visible ask.
+    const avgFloor = (cost + remaining) / (qty + remaining / last);
+    return { value: avgFloor / mid - 1, atLeast: true };
   };
   return { depth2, slips: SIZES.map(walk) };
 }
@@ -428,7 +431,7 @@ export function buildView(l: Loaded, position: PositionConfig, thesis: ThesisCon
 
   const onchainVenues = new Map<string, VenueRow>();
   for (const x of pools) {
-    const name = `${protocolOf(x.dex)} (${networkLabel(x.network)})`;
+    const name = `${protocolOf(x.dex)} · ${networkLabel(x.network)}`;
     const v = onchainVenues.get(name) ?? { name, vol24h: 0, onchain: true, isRhea: x.dex === DEX_IDS.rhea };
     v.vol24h += x.vol24h;
     onchainVenues.set(name, v);

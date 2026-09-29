@@ -17,7 +17,7 @@ export function price(v: number | null | undefined): string {
   if (bad(v)) return DASH;
   if (v >= 1000) return `$${v.toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
   if (v >= 1) return `$${v.toFixed(3)}`;
-  return `$${v.toPrecision(4)}`;
+  return v >= 0.01 ? `$${v.toFixed(4)}` : `$${v.toPrecision(3)}`;
 }
 
 export function pct(v: number | null | undefined, digits = 1, signed = true): string {
