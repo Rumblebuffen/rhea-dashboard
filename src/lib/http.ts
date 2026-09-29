@@ -39,7 +39,7 @@ export async function getJson<T>(url: string, { init = {}, timeoutMs = 20_000 }:
 
 // Keyless GeckoTerminal allows ~30 calls/min and keyless CoinGecko far fewer, so calls to
 // each are queued with a minimum gap. The browser makes few calls and stays snappy.
-const GAP_MS = inBrowser ? { gt: 350, cg: 0 } : { gt: 3_000, cg: 7_000 };
+const GAP_MS = inBrowser ? { gt: 350, cg: 0 } : { gt: 6_000, cg: 7_000 };
 const queues: Record<string, { chain: Promise<unknown>; last: number }> = {};
 
 function paced<T>(key: keyof typeof GAP_MS, fn: () => Promise<T>): Promise<T> {
