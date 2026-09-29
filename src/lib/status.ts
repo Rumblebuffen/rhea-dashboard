@@ -13,6 +13,11 @@ export type Status = 'live' | 'snapshot' | 'stale' | 'missing';
 
 export const SNAPSHOT_MAX_AGE_MS = 45 * 60_000;
 const LIVE_CACHE_MS = 5 * 60_000;
+const DAY_MS = 86_400_000;
+// Yesterday's daily history still counts as current for a while after midnight, until the first
+// scheduled run of the new day rebuilds it (GitHub often starts cron runs late).
+const DAILY_GRACE_MS = 2 * 60 * 60_000;
+const nextUtcMidnight = (t: number) => (Math.floor(t / DAY_MS) + 1) * DAY_MS;
 const RANK: Record<Status, number> = { live: 0, snapshot: 1, stale: 2, missing: 3 };
 
 export interface Resolved<T> {
@@ -33,16 +38,24 @@ async function capture<K extends SourceId>(id: K, ctx: Ctx): Promise<SourceResul
   const started = Date.now();
   try {
     const data = await SOURCES[id].run(ctx);
-    return { ok: true, fetchedAt: Date.now(), data };
+    const fetchedAt = Date.now();
+    return SOURCES[id].daily ? { ok: true, fetchedAt, data, freshUntil: nextUtcMidnight(fetchedAt) } : { ok: true, fetchedAt, data };
   } catch (e) {
     return { ok: false, fetchedAt: started, data: null, error: errMsg(e) };
   }
 }
 
-/** Server side (scripts/snapshot.mjs): run every source, including the snapshot-only ones. */
-export async function collectSnapshot(): Promise<Snapshot> {
+/**
+ * Server side (scripts/snapshot.mjs): run every source, including the snapshot-only ones.
+ * Daily sources are copied from `previous` (the live snapshot) until UTC midnight instead of refetched.
+ */
+export async function collectSnapshot(previous: Snapshot | null = null): Promise<Snapshot> {
   resetMemo();
-  const ids = await capture('ids', { env: 'node', ids: FALLBACK_IDS });
+  const reuse = <K extends SourceId>(id: K): SourceResult<SourceDataMap[K]> | null => {
+    const p = previous?.sources[id] as SourceResult<SourceDataMap[K]> | undefined;
+    return p?.ok && p.freshUntil != null && Date.now() < p.freshUntil ? p : null;
+  };
+  const ids = reuse('ids') ?? (await capture('ids', { env: 'node', ids: FALLBACK_IDS }));
   const ctx: Ctx = { env: 'node', ids: ids.data ?? FALLBACK_IDS };
   const [prices, priceHistory, rheaMarket, nearDex, rheaDex, cexZec, rheaVenues, rheaBooks, holders, zecPools] = await Promise.all([
     capture('prices', ctx),
@@ -56,7 +69,7 @@ export async function collectSnapshot(): Promise<Snapshot> {
     capture('holders', ctx),
     capture('zecPools', ctx),
   ]);
-  const zecHistory = await capture('zecHistory', { ...ctx, zecPools: zecPools.data });
+  const zecHistory = reuse('zecHistory') ?? (await capture('zecHistory', { ...ctx, zecPools: zecPools.data }));
   return {
     version: 1,
     fetchedAt: Date.now(),
@@ -87,7 +100,8 @@ async function cachedLive<T>(id: SourceId, run: () => Promise<T>): Promise<{ dat
 async function resolveOne<K extends SourceId>(id: K, snap: Snapshot | null, ctx: Ctx): Promise<Resolved<SourceDataMap[K]>> {
   const def = SOURCES[id];
   const s = snap?.sources[id] as SourceResult<SourceDataMap[K]> | undefined;
-  const snapFresh = !!s?.ok && Date.now() - s.fetchedAt < SNAPSHOT_MAX_AGE_MS;
+  const snapFresh =
+    !!s?.ok && (s.freshUntil != null ? Date.now() < s.freshUntil + DAILY_GRACE_MS : Date.now() - s.fetchedAt < SNAPSHOT_MAX_AGE_MS);
   if (snapFresh) return { status: 'snapshot', data: s!.data, fetchedAt: s!.fetchedAt, label: def.label };
   if (def.browser) {
     try {

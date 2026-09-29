@@ -44,6 +44,8 @@ interface SourceDef<T> {
   label: string;
   /** false = too many calls or no CORS; only the scheduled snapshot runs it. */
   browser: boolean;
+  /** Built from complete UTC days (or rarely-changing ids): fetched once a day, reused until midnight. */
+  daily?: boolean;
   run: (ctx: Ctx) => Promise<T>;
 }
 
@@ -200,29 +202,33 @@ async function zecPools(ctx: Ctx): Promise<ZecPoolsData> {
   const errors: string[] = [];
   for (const t of ctx.ids.zecTokens) {
     const maxPages = t.network === 'near' ? 4 : 2;
-    try {
-      for (let page = 1; page <= maxPages; page++) {
-        const d = await gtGet<{ data: GtPool[] }>(
+    for (let page = 1; page <= maxPages; page++) {
+      let d: { data: GtPool[] };
+      try {
+        d = await gtGet<{ data: GtPool[] }>(
           `/networks/${t.network}/tokens/${encodeURIComponent(t.address)}/pools?page=${page}&sort=h24_volume_usd_desc`,
         );
-        for (const x of d.data) {
-          if (pools.has(x.id)) continue;
-          pools.set(x.id, {
-            id: x.id,
-            network: t.network,
-            dex: x.relationships.dex.data.id,
-            name: x.attributes.name,
-            vol24h: num(x.attributes.volume_usd?.h24),
-            reserveUsd: numOrNull(x.attributes.reserve_in_usd),
-          });
-        }
-        if (d.data.length < 20 || d.data.every((x) => num(x.attributes.volume_usd?.h24) < 1_000)) break;
+      } catch (e) {
+        // Losing a chain's top pools would shrink the denominator and inflate Rhea's share, so fail
+        // the whole source (the last good snapshot is shown as stale instead). Later pages are small.
+        if (page === 1) throw new Error(`${t.label}: ${errMsg(e)}`);
+        errors.push(`${t.label} page ${page}: ${errMsg(e)}`);
+        break;
       }
-    } catch (e) {
-      errors.push(`${t.label}: ${errMsg(e)}`);
+      for (const x of d.data) {
+        if (pools.has(x.id)) continue;
+        pools.set(x.id, {
+          id: x.id,
+          network: t.network,
+          dex: x.relationships.dex.data.id,
+          name: x.attributes.name,
+          vol24h: num(x.attributes.volume_usd?.h24),
+          reserveUsd: numOrNull(x.attributes.reserve_in_usd),
+        });
+      }
+      if (d.data.length < 20 || d.data.every((x) => num(x.attributes.volume_usd?.h24) < 1_000)) break;
     }
   }
-  if (!pools.size) throw new Error(errors.join('; ') || 'GeckoTerminal returned no ZEC pools');
   return { tokens: ctx.ids.zecTokens, pools: [...pools.values()], errors };
 }
 
@@ -251,7 +257,8 @@ async function zecHistory(ctx: Ctx): Promise<ZecHistoryData> {
   const days = Array.from({ length: 90 }, (_, i) => today - (90 - i) * DAY);
   const buckets = Object.fromEntries(ZEC_BUCKETS.map((b) => [b, days.map(() => 0)])) as Record<ZecBucket, number[]>;
   const errors: string[] = [];
-  let used = 0;
+  const fetched = new Set<string>();
+  chosen.sort((a, b) => Number(b.dex === DEX_IDS.rhea) - Number(a.dex === DEX_IDS.rhea));
   for (const p of chosen) {
     const address = p.id.slice(p.network.length + 1);
     try {
@@ -262,14 +269,21 @@ async function zecHistory(ctx: Ctx): Promise<ZecHistoryData> {
         const i = (candle[0] - days[0]) / DAY;
         if (Number.isInteger(i) && i >= 0 && i < days.length) buckets[bucketOf(p)][i] += candle[5];
       }
-      used++;
+      fetched.add(p.id);
     } catch (e) {
       errors.push(`${p.name} (${p.dex}): ${errMsg(e)}`);
     }
   }
-  if (!used) throw new Error(errors.slice(0, 3).join('; ') || 'GeckoTerminal returned no OHLCV');
+  // Without Rhea's biggest ZEC pool the numerator is wrong, so publish nothing rather than a skewed share.
+  const topRhea = chosen.filter((p) => p.dex === DEX_IDS.rhea).sort((a, b) => b.vol24h - a.vol24h)[0];
+  if (!fetched.size || (topRhea && !fetched.has(topRhea.id))) {
+    throw new Error(`history incomplete: ${errors.slice(0, 3).join('; ') || 'GeckoTerminal returned no OHLCV'}`);
+  }
+  for (const c of coverage) {
+    c.covered24h = chosen.filter((p) => p.network === c.network && fetched.has(p.id)).reduce((s, p) => s + p.vol24h, 0);
+  }
   for (const b of ZEC_BUCKETS) buckets[b] = buckets[b].map(Math.round);
-  return { days, buckets, poolsUsed: used, coverage, errors };
+  return { days, buckets, poolsUsed: fetched.size, coverage, errors };
 }
 
 interface CgTicker {
@@ -439,14 +453,14 @@ async function holders(ctx: Ctx): Promise<HoldersData> {
 }
 
 export const SOURCES: { [K in keyof SourceDataMap]: SourceDef<SourceDataMap[K]> } = {
-  ids: { label: 'CoinGecko platforms + GeckoTerminal token map', browser: false, run: () => resolveIds() },
+  ids: { label: 'CoinGecko platforms + GeckoTerminal token map', browser: false, daily: true, run: () => resolveIds() },
   prices: { label: 'DefiLlama coins', browser: true, run: prices },
   priceHistory: { label: 'DefiLlama coins (daily)', browser: true, run: priceHistory },
   rheaMarket: { label: 'CoinGecko (DefiLlama fallback)', browser: true, run: rheaMarket },
   nearDex: { label: 'DefiLlama NEAR DEX volume', browser: true, run: nearDex },
   rheaDex: { label: 'DefiLlama Rhea DEX volume', browser: true, run: rheaDex },
   zecPools: { label: 'GeckoTerminal ZEC pools', browser: true, run: zecPools },
-  zecHistory: { label: 'GeckoTerminal daily OHLCV', browser: false, run: zecHistory },
+  zecHistory: { label: 'GeckoTerminal daily OHLCV', browser: false, daily: true, run: zecHistory },
   cexZec: { label: 'CoinGecko ZEC tickers (CoinPaprika fallback)', browser: true, run: cexZec },
   rheaVenues: { label: 'DexScreener + CoinGecko tickers', browser: true, run: rheaVenues },
   rheaBooks: { label: 'Gate + MEXC order books', browser: true, run: rheaBooks },

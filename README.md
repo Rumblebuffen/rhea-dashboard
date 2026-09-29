@@ -43,7 +43,8 @@ Needs Node 22+. `npm run snapshot` takes a few minutes because it paces its call
 
 - **Pages was turned on once** with Settings → Pages → Build and deployment → Source: **GitHub Actions** (the same as `gh api -X POST repos/Rumblebuffen/rhea-dashboard/pages -f build_type=workflow`).
 - **Refresh now:** Actions → *Snapshot, build, deploy* → Run workflow.
-- **If a source fails** during a run, the snapshot keeps that source's last good value from the live site, marked with its original time, so the block shows STALE instead of blank.
+- **The 90-day history and the id lookups are rebuilt once a day.** They are made of complete UTC days, so every other run that day copies them from the live snapshot. That keeps a normal run to about 10 GeckoTerminal calls (the first run after midnight makes about 40) and clear of its rate limit.
+- **If a source fails** during a run, the snapshot keeps that source's last good value from the live site, marked with its original time, so the block shows STALE instead of blank. The history refuses to publish at all if Rhea's main ZEC pool is missing from it, so a partial fetch can't skew the share.
 - GitHub pauses scheduled workflows after 60 days with no repository activity. The workflow makes an empty commit after 45 quiet days to prevent that.
 - GitHub often starts cron runs late. The page treats a snapshot older than 45 minutes as stale and tries the live APIs instead.
 
@@ -93,12 +94,12 @@ All free, keyless, public endpoints. One function per source lives in `src/lib/s
 | RHEA mcap, supply | CoinGecko `/coins/rhea-2` (+ `/market_chart` in the snapshot) | yes | Keyless CoinGecko rate-limits hard (HTTP 429/403). Falls back to DefiLlama `/mcaps` plus the fixed supply in `ids.ts`. |
 | NEAR DEX volume, Rhea's NEAR share | DefiLlama `api.llama.fi/overview/dexs/near`, `/summary/dexs/rhea-dex` | yes | Daily granularity |
 | ZEC pools on every chain, incl. NEAR Intents | GeckoTerminal `/networks/{net}/tokens/{token}/pools` | yes | ~30 calls/min |
-| ZEC daily history (chart, 7d / 30d shares) | GeckoTerminal `/networks/{net}/pools/{pool}/ohlcv/day` | snapshot only | ~25 calls per run |
+| ZEC daily history (chart, 7d / 30d shares) | GeckoTerminal `/networks/{net}/pools/{pool}/ohlcv/day` | snapshot only | ~30 calls, once a day |
 | CEX ZEC spot volume | CoinGecko `/coins/zcash/tickers`, fallback CoinPaprika `/coins/zec-zcash/markets` | yes | Spot only; anomalous and stale tickers dropped. About 40 exchanges; the page flags thin coverage. |
 | RHEA pools (NEAR, BNB, Solana) | DexScreener `/token-pairs/v1/{chain}/{token}` | yes | 300 calls/min |
 | RHEA CEX depth, 24h volume | Gate `/api/v4/spot/order_book`, `/spot/tickers`; MEXC `/api/v3/depth`, `/ticker/24hr`; CoinGecko `/coins/rhea-2/tickers?depth=true` | Gate yes, MEXC snapshot only (no CORS) | Top 100 levels of each book |
 | Holders (NEAR) | NearBlocks `/v1/fts/{contract}/holders/count`, `/holders` | yes | NEAR only |
-| Id resolution | CoinGecko `platforms`; GeckoTerminal `/search/pools` + `/tokens/multi` | snapshot only | Falls back to the list in `ids.ts` |
+| Id resolution | CoinGecko `platforms`; GeckoTerminal `/search/pools` + `/tokens/multi` | snapshot only, once a day | Falls back to the list in `ids.ts` |
 
 Deliberately left out: BSC and Solana holder counts (need keyed explorer APIs), X mention counts (paid API, so `lastAdvisorPing` is manual), FOMO (no public endpoint), and revenue, fees and buybacks (out of scope).
 

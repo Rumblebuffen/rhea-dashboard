@@ -1,7 +1,8 @@
 import { cfgNum, type PositionConfig, type ThesisConfig } from './config';
-import { pct, price as fmtPrice, share } from './format';
+import { pct, price as fmtPrice, share, utcDay, utcTime } from './format';
 import { DEX_IDS, RHEA_CEX, RHEA_SUPPLY_FALLBACK, networkLabel } from './ids';
 import { tradeStatus, type TradeStatus } from './signals';
+import { SOURCES } from './sources';
 import { worstStatus, type Loaded, type Status } from './status';
 import { ZEC_BUCKETS, type RheaBook, type RheaCexTicker, type RheaDexPair, type Series, type SourceId } from './types';
 
@@ -18,14 +19,15 @@ export interface BlockMeta {
 }
 
 function meta(l: Loaded, ids: SourceId[]): BlockMeta {
-  const rs = ids.map((id) => l[id]);
-  const present = rs.filter((r) => r.status !== 'missing');
-  const times = present.map((r) => r.fetchedAt).filter((t): t is number => t != null);
+  const present = ids.filter((id) => l[id].status !== 'missing');
+  // Once-a-day history would make every block look hours old; time the block by its live inputs.
+  const timed = present.filter((id) => !SOURCES[id].daily);
+  const times = (timed.length ? timed : present).map((id) => l[id].fetchedAt).filter((t): t is number => t != null);
   return {
-    status: present.length ? worstStatus(present.map((r) => r.status)) : 'missing',
+    status: present.length ? worstStatus(present.map((id) => l[id].status)) : 'missing',
     updatedAt: times.length ? Math.min(...times) : null,
-    sources: [...new Set(rs.map((r) => r.label))],
-    problems: rs.filter((r) => r.error).map((r) => `${r.label} (${r.status}): ${r.error}`),
+    sources: [...new Set(ids.map((id) => l[id].label))],
+    problems: ids.filter((id) => l[id].error).map((id) => `${l[id].label} (${l[id].status}): ${l[id].error}`),
   };
 }
 
@@ -458,8 +460,13 @@ export function buildView(l: Loaded, position: PositionConfig, thesis: ThesisCon
 
   const h = l.zecHistory.data;
   const coverage = h?.coverage.map((c) => `${networkLabel(c.network)} ${share(ratio(c.covered24h, c.total24h), 0)}`).join(', ');
+  const bMeta = meta(l, ['zecPools', 'zecHistory', 'cexZec', 'nearDex', 'rheaDex']);
+  bMeta.problems.push(
+    ...(l.zecPools.data?.errors ?? []).map((x) => `GeckoTerminal ZEC pools, partly missing: ${x}`),
+    ...(h?.errors ?? []).map((x) => `ZEC history, pool skipped: ${x}`),
+  );
   const b: BlockBVM = {
-    meta: meta(l, ['zecPools', 'zecHistory', 'cexZec', 'nearDex', 'rheaDex']),
+    meta: bMeta,
     rheaZec24h,
     rheaZecPools: rheaPools.filter((x) => x.vol24h > 0).length,
     onchain24h,
@@ -494,7 +501,7 @@ export function buildView(l: Loaded, position: PositionConfig, thesis: ThesisCon
         }
       : null,
     historyNote: h
-      ? `Daily history = top pools by today's volume (${h.poolsUsed} pools; covers ${coverage} of today's volume). Pools that were big in the past but are quiet today are under-counted.`
+      ? `Daily history through ${utcDay(h.days[h.days.length - 1])}, rebuilt once a day (last ${utcTime(l.zecHistory.fetchedAt)}) from the top pools by that day's volume (${h.poolsUsed} pools; ${coverage} of volume covered). Pools that were big in the past but are quiet now are under-counted.`
       : `No daily history: ${why(l, 'zecHistory')}`,
   };
 

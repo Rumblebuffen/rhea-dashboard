@@ -138,6 +138,8 @@ export interface SourceResult<T> {
   fetchedAt: number;
   data: T | null;
   error?: string;
+  /** Daily sources only: the value stays current until this time (next UTC midnight). */
+  freshUntil?: number;
 }
 
 export interface Snapshot {
